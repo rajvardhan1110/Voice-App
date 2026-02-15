@@ -21,32 +21,20 @@ class _VoiceHomePageState extends State<VoiceHomePage> {
   Interpreter? _interpreter;
   StreamSubscription<List<double>>? _audioSub;
 
-  String _statusText = "Initializing...";
+  String _statusText = "Press Start to Record";
+  bool _isRecording = false;
   bool _isSafe = false;
   double _currentAmplitude = 0.0;
   String _debugInfo = "";
+  List<bool> _safeHistory = []; // store safe/not safe for entire session
 
   static const int _requiredSamples = 15600;
   final List<double> _buffer = [];
   DateTime _lastRun = DateTime.now();
 
-  // Safe class indices (Speech + minor background sounds, BREATHING REMOVED)
+  // Safe class indices (Speech + minor background sounds, breathing removed)
   final Set<int> _safeClasses = {
-    0,    // Speech
-    1,    // Child speech
-    2,    // Conversation
-    3,    // Narration
-    4,    // Babbling
-    5,    // Speech Synth
-    12,   // Whispering
-    13,   // Laughter
-    14,   // Baby laughter
-    19,   // Crying
-    62,   // Hubbub
-    63,   // Children playing
-    104,  // Water
-    132,  // Click
-    // 34 and 294 removed → breathing is NOT safe
+    0, 1, 2, 3, 4, 5, 12, 13, 14, 19, 62, 63, 104, 132
   };
 
   @override
@@ -61,11 +49,6 @@ class _VoiceHomePageState extends State<VoiceHomePage> {
       try {
         _interpreter = await Interpreter.fromAsset('assets/models/yamnet.tflite');
         print("✅ YAMNet READY");
-        _startStreaming();
-        setState(() {
-          _statusText = "🎤 SPEAK / BREATHE";
-          _debugInfo = "Silence = NOT SAFE";
-        });
       } catch (e) {
         setState(() {
           _statusText = "❌ Model Error: $e";
@@ -78,7 +61,15 @@ class _VoiceHomePageState extends State<VoiceHomePage> {
     }
   }
 
-  void _startStreaming() {
+  void _startRecording() {
+    setState(() {
+      _isRecording = true;
+      _statusText = "Recording...";
+      _debugInfo = "";
+      _safeHistory.clear();
+      _buffer.clear();
+    });
+
     _audioSub = AudioStreamer().audioStream.listen((List<double> samples) {
       double maxAmp = samples.fold(0.0, (prev, e) => max(prev, e.abs()));
       setState(() => _currentAmplitude = maxAmp);
@@ -100,6 +91,25 @@ class _VoiceHomePageState extends State<VoiceHomePage> {
     });
   }
 
+  void _stopRecording() {
+    _audioSub?.cancel();
+    _audioSub = null;
+    setState(() {
+      _isRecording = false;
+
+      // Calculate overall session safety
+      if (_safeHistory.isNotEmpty) {
+        int safeCount = _safeHistory.where((s) => s).length;
+        double safeRatio = safeCount / _safeHistory.length;
+        _isSafe = safeRatio > 0.5; // >50% of session is safe
+        _statusText = _isSafe ? "✅ OVERALL SAFE" : "❌ OVERALL NOT SAFE";
+      } else {
+        _statusText = "❌ NO AUDIO DETECTED";
+        _isSafe = false;
+      }
+    });
+  }
+
   void _runInference(Float32List input) {
     if (_interpreter == null) return;
 
@@ -115,47 +125,38 @@ class _VoiceHomePageState extends State<VoiceHomePage> {
       _interpreter!.run(input, output);
       List<double> scores = output[0];
 
-      // Top class
       double maxProb = scores.reduce(max);
       int maxIndex = scores.indexOf(maxProb);
       double speechScore = scores[0];
 
-      // Silence detection
       bool isSilence = maxProb < 0.08 || _currentAmplitude < 0.01;
-
-      // Safe detection (breathing removed)
-      bool isSafe = !isSilence &&
+      bool isSafeNow = !isSilence &&
           (_safeClasses.contains(maxIndex) || (speechScore > 0.05 && maxProb < 0.85));
 
-      // Update UI
-      setState(() {
-        _debugInfo =
-            "Class:$maxIndex ${_getClassName(maxIndex)} ${(maxProb*100).toStringAsFixed(0)}% "
-            "Speech:${(speechScore*100).toStringAsFixed(0)}%";
+      _safeHistory.add(isSafeNow);
 
-        if (isSilence) {
-          _isSafe = false;
-          _statusText = "❌ SILENCE";
-        } else if (isSafe) {
-          _isSafe = true;
-          _statusText = "✅ SAFE";
-        } else {
-          _isSafe = false;
-          _statusText = "❌ NOT SAFE";
-        }
-      });
+      // Update UI for live recording
+      if (_isRecording) {
+        setState(() {
+          _debugInfo =
+              "Class:$maxIndex ${_getClassName(maxIndex)} ${(maxProb*100).toStringAsFixed(0)}% "
+              "Speech:${(speechScore*100).toStringAsFixed(0)}%";
+          _statusText = isSilence
+              ? "❌ SILENCE"
+              : (isSafeNow ? "✅ SAFE" : "❌ NOT SAFE");
+        });
+      }
 
       print(
           "🎯 $maxIndex (${_getClassName(maxIndex)}) ${maxProb.toStringAsFixed(2)} "
           "Speech:${speechScore.toStringAsFixed(3)} "
-          "${isSilence ? '🔇SILENCE' : isSafe ? '✅SAFE' : '❌NOT SAFE'} "
+          "${isSilence ? '🔇SILENCE' : isSafeNow ? '✅SAFE' : '❌NOT SAFE'} "
           "Amp:${(_currentAmplitude*100).toStringAsFixed(0)}%");
     } catch (e) {
       print("Error: $e");
     }
   }
 
-  // Map important class indices to readable names
   String _getClassName(int index) {
     Map<int, String> classNames = {
       0: "Speech",
@@ -172,7 +173,7 @@ class _VoiceHomePageState extends State<VoiceHomePage> {
       63: "Children playing",
       104: "Water",
       132: "Click",
-      34: "Breathing",  // still labeled for debug, but NOT safe
+      34: "Breathing",
       294: "Breathing",
     };
     return classNames[index] ?? "Class $index";
@@ -223,6 +224,19 @@ class _VoiceHomePageState extends State<VoiceHomePage> {
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 20),
+                  ElevatedButton(
+                    onPressed:
+                        _isRecording ? _stopRecording : _startRecording,
+                    style: ElevatedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 50, vertical: 15),
+                        backgroundColor: Colors.blueAccent),
+                    child: Text(
+                      _isRecording ? "Stop Recording" : "Start Recording",
+                      style: const TextStyle(fontSize: 20),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
                   const Text(
                     "✅ SAFE = Voice / minor background\n❌ NOT SAFE = All others (incl. Breathing)",
                     style: TextStyle(
