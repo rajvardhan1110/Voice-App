@@ -1,0 +1,37 @@
+name: voice_app
+description: "Voice Safety Detector Flutter App"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+# dependencies:
+#   flutter:
+#     sdk: flutter
+#   cupertino_icons: ^1.0.8
+
+#   # Microphone streaming
+#   mic_stream: ^0.7.2
+#   permission_handler: ^11.4.0
+#   path_provider: ^2.1.0
+
+#   # TensorFlow Lite (Upgraded for Dart 3 compatibility)
+#   tflite_flutter: ^0.12.1
+
+dependencies:
+  flutter:
+    sdk: flutter
+  tflite_flutter: ^0.12.1
+  audio_streamer: ^4.0.0      # Modern alternative
+  permission_handler: ^11.4.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0 # Standard version for current SDKs
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/models/yamnet.tflite
